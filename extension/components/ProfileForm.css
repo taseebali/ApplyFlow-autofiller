@@ -1,0 +1,143 @@
+.panel {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 20px 16px 40px;
+}
+
+.panel header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.panel h1 {
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.panel .actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.panel section {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 20px;
+  margin-bottom: 16px;
+}
+
+.panel section h2 {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  margin-bottom: 14px;
+}
+
+.panel .hint {
+  color: var(--text-muted);
+  font-size: 12.5px;
+  margin: -6px 0 14px;
+}
+
+.panel .grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 12px;
+}
+
+.panel .field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 12.5px;
+  text-align: left;
+}
+
+.panel .field > span {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.panel .field.checkbox {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.panel .field input,
+.panel .field select,
+.panel .field textarea {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  padding: 7px 9px;
+  font-family: inherit;
+  font-size: 13px;
+}
+
+.panel .field input:focus,
+.panel .field select:focus,
+.panel .field textarea:focus {
+  border-color: var(--text-muted);
+}
+
+.panel .field textarea {
+  resize: vertical;
+  min-height: 64px;
+}
+
+.panel .entry {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  margin-bottom: 12px;
+  padding: 14px;
+}
+
+.panel .entry:last-of-type {
+  margin-bottom: 4px;
+}
+
+.panel .entry .field {
+  margin-top: 10px;
+}
+
+.panel .remove {
+  margin-top: 12px;
+}
+
+.panel .error {
+  background: var(--danger-bg);
+  color: var(--danger-text);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 12.5px;
+  margin-bottom: 14px;
+}
+
+.panel .database-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.panel .database-option {
+  width: 100%;
+  text-align: left;
+}
+
+.panel .database-option-selected {
+  background: var(--accent);
+  color: var(--accent-text);
+  border-color: var(--accent);
+}

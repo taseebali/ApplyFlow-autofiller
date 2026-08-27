@@ -1,0 +1,185 @@
+:root {
+  --bg: #fbfbfa;
+  --surface: #ffffff;
+  --surface-hover: #f4f3f1;
+  --border: #eaeaea;
+  --text: #2f3437;
+  --text-muted: #787774;
+  --accent: #111111;
+  --accent-text: #ffffff;
+  --accent-hover: #333333;
+  --danger-bg: #fdebec;
+  --danger-text: #9f2f2d;
+  --success-bg: #edf3ec;
+  --success-text: #346538;
+  --warning-bg: #fbf3db;
+  --warning-text: #956400;
+
+  color-scheme: light dark;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-text-size-adjust: 100%;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1c1c1a;
+    --surface: #242422;
+    --surface-hover: #2c2c29;
+    --border: rgba(255, 255, 255, 0.12);
+    --text: #ececea;
+    --text-muted: #a3a3a0;
+    --accent: #ececea;
+    --accent-text: #111111;
+    --accent-hover: #ffffff;
+    --danger-bg: #3a2323;
+    --danger-text: #f2a3a0;
+    --success-bg: #223124;
+    --success-text: #8fcf9a;
+    --warning-bg: #362e17;
+    --warning-text: #e0b856;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+a {
+  color: inherit;
+}
+
+h1,
+h2,
+h3 {
+  margin: 0;
+  color: var(--text);
+  letter-spacing: -0.01em;
+}
+
+p {
+  text-wrap: pretty;
+}
+
+.loading-state {
+  color: var(--text-muted);
+  font-size: 13px;
+  padding: 32px 20px;
+  text-align: center;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--text-muted);
+  outline-offset: 1px;
+}
+
+.btn {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  padding: 8px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  transition: background-color 0.15s ease, transform 0.1s ease;
+}
+
+.btn:hover {
+  background: var(--surface-hover);
+}
+
+.btn:active {
+  transform: scale(0.98);
+}
+
+.btn-primary {
+  background: var(--accent);
+  color: var(--accent-text);
+  border-color: var(--accent);
+}
+
+.btn-primary:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+.btn-danger {
+  background: var(--danger-bg);
+  color: var(--danger-text);
+  border-color: transparent;
+}
+
+.btn-danger:hover {
+  filter: brightness(0.95);
+}
+
+.btn-plain {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  padding: 4px 0;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.btn-plain:hover {
+  color: var(--text);
+}
+
+.btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+  transform: none;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 9999px;
+  padding: 3px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.pill-neutral {
+  background: var(--surface-hover);
+  color: var(--text-muted);
+}
+
+.pill-success {
+  background: var(--success-bg);
+  color: var(--success-text);
+}
+
+.pill-warning {
+  background: var(--warning-bg);
+  color: var(--warning-text);
+}
+
+.pill-danger {
+  background: var(--danger-bg);
+  color: var(--danger-text);
+}

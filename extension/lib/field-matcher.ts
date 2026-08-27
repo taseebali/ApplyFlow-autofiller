@@ -1,0 +1,272 @@
+import { SCHEMA_FIELDS } from './schema';
+
+export type FillableElement = HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
+
+export interface FieldMatch {
+  element: FillableElement;
+  path: string;
+  confidence: number;
+  /** Best-available human-readable label, for surfacing "these fields need attention" in the UI. */
+  label: string;
+}
+
+export interface RadioGroupMatch {
+  elements: HTMLInputElement[];
+  path: string;
+  confidence: number;
+  label: string;
+}
+
+const CONFIDENCE_THRESHOLD = 0.6;
+
+const SOURCE_WEIGHTS: Record<string, number> = {
+  label: 1.0,
+  ariaLabel: 0.95,
+  placeholder: 0.8,
+  name: 0.75,
+  id: 0.7,
+};
+
+export function normalizeText(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[_\-.]/g, ' ')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function scoreAgainstAlias(text: string, alias: string): number {
+  if (!text) return 0;
+  if (text === alias) return 1;
+  if (text.includes(alias) || alias.includes(text)) return 0.85;
+
+  const textTokens = new Set(text.split(' '));
+  const aliasTokens = new Set(alias.split(' '));
+  const intersection = [...textTokens].filter((t) => aliasTokens.has(t));
+  const union = new Set([...textTokens, ...aliasTokens]);
+  if (union.size === 0) return 0;
+  return intersection.length / union.size;
+}
+
+function getLabelText(el: FillableElement): string {
+  if (el.labels && el.labels.length > 0) {
+    return Array.from(el.labels)
+      .map((l) => l.textContent ?? '')
+      .join(' ');
+  }
+  // Fall back to a wrapping <label> that has no `for` attribute.
+  const wrappingLabel = el.closest('label');
+  if (wrappingLabel) return wrappingLabel.textContent ?? '';
+  return '';
+}
+
+/** Best-available raw (non-normalized) label text for display purposes. */
+function getDisplayLabel(el: FillableElement): string {
+  const label = getLabelText(el).trim();
+  if (label) return label;
+  const ariaLabel = el.getAttribute('aria-label')?.trim();
+  if (ariaLabel) return ariaLabel;
+  const placeholder = (el as HTMLInputElement).placeholder?.trim();
+  if (placeholder) return placeholder;
+  const name = el.getAttribute('name')?.trim();
+  if (name) return name;
+  return el.id || 'field';
+}
+
+function getCandidates(el: FillableElement): Array<{ source: string; text: string }> {
+  const ariaLabelledBy = el.getAttribute('aria-labelledby');
+  const ariaLabelledByText = ariaLabelledBy
+    ? ariaLabelledBy
+        .split(' ')
+        .map((id) => document.getElementById(id)?.textContent ?? '')
+        .join(' ')
+    : '';
+
+  return [
+    { source: 'label', text: getLabelText(el) },
+    { source: 'ariaLabel', text: el.getAttribute('aria-label') ?? ariaLabelledByText },
+    { source: 'placeholder', text: (el as HTMLInputElement).placeholder ?? '' },
+    { source: 'name', text: el.getAttribute('name') ?? '' },
+    { source: 'id', text: el.id ?? '' },
+  ]
+    .map((c) => ({ source: c.source, text: normalizeText(c.text) }))
+    .filter((c) => c.text.length > 0);
+}
+
+/** Matches every fillable form element on the page to a Profile schema field. */
+export function matchFields(root: ParentNode = document): FieldMatch[] {
+  const elements = Array.from(
+    root.querySelectorAll<FillableElement>('input, select, textarea')
+  ).filter((el) => {
+    if (el instanceof HTMLInputElement) {
+      // Radios are matched as groups (see matchRadioGroups) since a single
+      // radio's own label is just its option text ("Yes"), not the question.
+      const skipTypes = ['hidden', 'submit', 'button', 'reset', 'image', 'file', 'radio'];
+      return !skipTypes.includes(el.type);
+    }
+    return true;
+  });
+
+  const matches: FieldMatch[] = [];
+
+  for (const element of elements) {
+    const candidates = getCandidates(element);
+    let bestPath: string | null = null;
+    let bestScore = 0;
+
+    for (const candidate of candidates) {
+      const weight = SOURCE_WEIGHTS[candidate.source] ?? 0.5;
+      for (const field of SCHEMA_FIELDS) {
+        for (const alias of field.aliases) {
+          const score = scoreAgainstAlias(candidate.text, alias) * weight;
+          if (score > bestScore) {
+            bestScore = score;
+            bestPath = field.path;
+          }
+        }
+      }
+    }
+
+    if (bestPath && bestScore >= CONFIDENCE_THRESHOLD) {
+      matches.push({ element, path: bestPath, confidence: bestScore, label: getDisplayLabel(element) });
+    }
+  }
+
+  return matches;
+}
+
+export interface FileInputMatch {
+  element: HTMLInputElement;
+  kind: 'resume' | 'coverLetter' | 'additional';
+}
+
+const FILE_INPUT_ALIASES: Record<FileInputMatch['kind'], string[]> = {
+  resume: ['resume', 'cv', 'curriculum vitae', 'lebenslauf'],
+  coverLetter: [
+    'cover letter',
+    'coverletter',
+    'motivation letter',
+    'letter of motivation',
+    'anschreiben',
+    'motivationsschreiben',
+  ],
+  // A catch-all upload field many ATSs use instead of (or alongside) dedicated
+  // resume/cover-letter fields — the fallback target when no dedicated field exists.
+  additional: [
+    'additional documents',
+    'additional document',
+    'supporting documents',
+    'supporting document',
+    'other documents',
+    'other document',
+    'attachments',
+    'weitere dokumente',
+    'sonstige unterlagen',
+    'zusätzliche dokumente',
+    'anhänge',
+  ],
+};
+
+/** Matches file-upload inputs on the page to "resume", "coverLetter", or a generic "additional" fallback field. */
+export function matchFileInputs(root: ParentNode = document): FileInputMatch[] {
+  const inputs = Array.from(root.querySelectorAll<HTMLInputElement>('input[type="file"]'));
+  const matches: FileInputMatch[] = [];
+
+  for (const element of inputs) {
+    const candidates = getCandidates(element);
+    let bestKind: FileInputMatch['kind'] | null = null;
+    let bestScore = 0;
+
+    for (const candidate of candidates) {
+      const weight = SOURCE_WEIGHTS[candidate.source] ?? 0.5;
+      for (const kind of Object.keys(FILE_INPUT_ALIASES) as Array<FileInputMatch['kind']>) {
+        for (const alias of FILE_INPUT_ALIASES[kind]) {
+          const score = scoreAgainstAlias(candidate.text, alias) * weight;
+          if (score > bestScore) {
+            bestScore = score;
+            bestKind = kind;
+          }
+        }
+      }
+    }
+
+    if (bestKind && bestScore >= CONFIDENCE_THRESHOLD) {
+      matches.push({ element, kind: bestKind });
+    }
+  }
+
+  return matches;
+}
+
+/** The visible option text for a single radio button, e.g. "Yes". */
+export function getRadioOptionLabel(radio: HTMLInputElement): string {
+  return getLabelText(radio);
+}
+
+/** The question a radio group is asking, from its <fieldset><legend> or ARIA group labelling. */
+export function getRadioGroupQuestionText(firstRadio: HTMLInputElement): string {
+  const fieldset = firstRadio.closest('fieldset');
+  const legend = fieldset?.querySelector('legend');
+  if (legend?.textContent) return legend.textContent;
+
+  const group = firstRadio.closest('[role="radiogroup"], [role="group"]');
+  if (group) {
+    const labelledBy = group.getAttribute('aria-labelledby');
+    if (labelledBy) {
+      const text = labelledBy
+        .split(' ')
+        .map((id) => document.getElementById(id)?.textContent ?? '')
+        .join(' ');
+      if (text.trim()) return text;
+    }
+    const ariaLabel = group.getAttribute('aria-label');
+    if (ariaLabel) return ariaLabel;
+  }
+
+  return '';
+}
+
+/** Groups radio buttons by `name` and matches each group's question to a Profile schema field. */
+export function matchRadioGroups(root: ParentNode = document): RadioGroupMatch[] {
+  const radios = Array.from(root.querySelectorAll<HTMLInputElement>('input[type="radio"]'));
+  const groups = new Map<string, HTMLInputElement[]>();
+  for (const radio of radios) {
+    if (!radio.name) continue;
+    const list = groups.get(radio.name) ?? [];
+    list.push(radio);
+    groups.set(radio.name, list);
+  }
+
+  const matches: RadioGroupMatch[] = [];
+
+  for (const elements of groups.values()) {
+    const [firstRadio] = elements;
+    if (elements.length < 2 || !firstRadio) continue;
+    const questionText = normalizeText(getRadioGroupQuestionText(firstRadio));
+    if (!questionText) continue;
+
+    let bestPath: string | null = null;
+    let bestScore = 0;
+    for (const field of SCHEMA_FIELDS) {
+      for (const alias of field.aliases) {
+        const score = scoreAgainstAlias(questionText, alias);
+        if (score > bestScore) {
+          bestScore = score;
+          bestPath = field.path;
+        }
+      }
+    }
+
+    if (bestPath && bestScore >= CONFIDENCE_THRESHOLD) {
+      matches.push({
+        elements,
+        path: bestPath,
+        confidence: bestScore,
+        label: getRadioGroupQuestionText(firstRadio).trim() || 'field',
+      });
+    }
+  }
+
+  return matches;
+}

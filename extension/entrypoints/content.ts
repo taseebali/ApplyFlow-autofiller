@@ -1,0 +1,141 @@
+import { fillFields, fillRadioGroups } from '@/lib/filler';
+import { matchFields, matchFileInputs, matchRadioGroups, type FileInputMatch } from '@/lib/field-matcher';
+import { getProfile } from '@/lib/storage';
+import { scrapeCompanyName } from '@/lib/company-scraper';
+import { scrapeJobDescription, scrapeJobTitle } from '@/lib/jd-scraper';
+import type { DocumentKind } from '@/lib/document-matcher';
+
+export interface FillPageMessage {
+  type: 'fill-page';
+}
+export interface FillPageResponse {
+  filledCount: number;
+  unmatchedCount: number;
+  unmatchedLabels: string[];
+}
+
+export interface GetJobInfoMessage {
+  type: 'get-job-info';
+}
+export interface GetJobInfoResponse {
+  companyName: string | null;
+  jobTitle: string | null;
+  jobDescription: string | null;
+  jobUrl: string;
+}
+
+export interface AttachDocumentsMessage {
+  type: 'attach-documents';
+  files: Array<{
+    kind: DocumentKind;
+    name: string;
+    mimeType: string;
+    // Raw bytes rather than a File/Blob: extension messaging's structured
+    // clone does not reliably preserve File/Blob objects across the
+    // side-panel-to-content-script boundary, but ArrayBuffer transfers fine.
+    data: ArrayBuffer;
+  }>;
+}
+export interface AttachDocumentsResponse {
+  attached: Partial<Record<DocumentKind, boolean>>;
+}
+
+type IncomingMessage = FillPageMessage | GetJobInfoMessage | AttachDocumentsMessage;
+
+/**
+ * Many ATSs don't have dedicated resume/cover-letter fields at all — just one
+ * generic "Additional Documents" upload. Prefer a dedicated field for each
+ * kind, but fall back to the generic one when it doesn't exist. If resume and
+ * cover letter end up sharing the same field, both files need to land in a
+ * single DataTransfer — setting `.files` twice would overwrite the first.
+ */
+function attachDocuments(entries: Array<{ kind: DocumentKind; file: File }>): Partial<Record<DocumentKind, boolean>> {
+  const matches = matchFileInputs(document);
+  const dedicated: Record<DocumentKind, FileInputMatch | undefined> = {
+    resume: matches.find((m) => m.kind === 'resume'),
+    coverLetter: matches.find((m) => m.kind === 'coverLetter'),
+  };
+  const fallback = matches.find((m) => m.kind === 'additional');
+
+  const result: Partial<Record<DocumentKind, boolean>> = {};
+  const filesByElement = new Map<HTMLInputElement, File[]>();
+
+  for (const entry of entries) {
+    const target = dedicated[entry.kind] ?? fallback;
+    if (!target) {
+      result[entry.kind] = false;
+      continue;
+    }
+    const list = filesByElement.get(target.element) ?? [];
+    list.push(entry.file);
+    filesByElement.set(target.element, list);
+    result[entry.kind] = true;
+  }
+
+  for (const [element, files] of filesByElement) {
+    const dataTransfer = new DataTransfer();
+    // Preserve anything already selected on a multi-file field so a second
+    // attach call (e.g. cover letter after resume) doesn't clobber the first.
+    if (element.multiple) {
+      Array.from(element.files ?? []).forEach((f) => dataTransfer.items.add(f));
+    }
+    files.forEach((f) => dataTransfer.items.add(f));
+    element.files = dataTransfer.files;
+    element.dispatchEvent(new Event('input', { bubbles: true }));
+    element.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+
+  return result;
+}
+
+export default defineContentScript({
+  matches: ['<all_urls>'],
+  main() {
+    browser.runtime.onMessage.addListener((message: IncomingMessage, _sender, sendResponse) => {
+      if (message?.type === 'fill-page') {
+        (async () => {
+          const profile = await getProfile();
+
+          const fieldMatches = matchFields(document);
+          const fieldResult = fillFields(fieldMatches, profile);
+
+          const radioGroupMatches = matchRadioGroups(document);
+          const radioResult = fillRadioGroups(radioGroupMatches, profile);
+
+          const response: FillPageResponse = {
+            filledCount: fieldResult.filledCount + radioResult.filledCount,
+            unmatchedCount: fieldResult.skippedCount + radioResult.skippedCount,
+            unmatchedLabels: [...fieldResult.skippedLabels, ...radioResult.skippedLabels],
+          };
+          sendResponse(response);
+        })();
+        return true;
+      }
+
+      if (message?.type === 'get-job-info') {
+        (async () => {
+          const response: GetJobInfoResponse = {
+            companyName: scrapeCompanyName(),
+            jobTitle: scrapeJobTitle(),
+            jobDescription: await scrapeJobDescription(),
+            jobUrl: location.href,
+          };
+          sendResponse(response);
+        })();
+        return true;
+      }
+
+      if (message?.type === 'attach-documents') {
+        const entries = message.files.map((f) => ({
+          kind: f.kind,
+          file: new File([f.data], f.name, { type: f.mimeType }),
+        }));
+        const response: AttachDocumentsResponse = { attached: attachDocuments(entries) };
+        sendResponse(response);
+        return true;
+      }
+
+      return undefined;
+    });
+  },
+});
