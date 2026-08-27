@@ -1,3 +1,11 @@
-# WXT + React
+# ApplyFlow — extension source
 
-This template should help get you started developing with React in WXT.
+See the [repo root README](../README.md) for what this project does and how to build/load it.
+
+This folder is a [WXT](https://wxt.dev) + React + TypeScript project.
+
+```bash
+npm install
+npm run dev     # local dev with hot reload
+npm run build   # production build -> .output/chrome-mv3
+```
