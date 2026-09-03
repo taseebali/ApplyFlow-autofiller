@@ -1,5 +1,11 @@
 import type { Settings } from './settings';
 
+/**
+ * Only the two fields an API call actually needs. Taking the whole settings
+ * object would drag UI-only state (such as `skipped`) into the client.
+ */
+export type NotionCredentials = Pick<Settings['notion'], 'token' | 'databaseId'>;
+
 const NOTION_VERSION = '2022-06-28';
 const MAX_RICH_TEXT_LENGTH = 2000;
 
@@ -74,7 +80,7 @@ export async function searchDatabases(token: string): Promise<NotionDatabaseOpti
 
 /** Creates a row in the user's Job Application Tracker database, with the JD as page body content. */
 export async function logApplicationToNotion(
-  notion: Settings['notion'],
+  notion: NotionCredentials,
   entry: NotionLogEntry
 ): Promise<{ url: string }> {
   const response = await fetch('https://api.notion.com/v1/pages', {
@@ -105,4 +111,108 @@ export async function logApplicationToNotion(
 
   const created = (await response.json()) as { url: string };
   return { url: created.url };
+}
+
+/** Confirms the token and database id actually work, so setup gives a yes/no answer instead of failing later. */
+export async function testConnection(
+  notion: NotionCredentials
+): Promise<{ ok: true; databaseTitle: string } | { ok: false; message: string }> {
+  if (!notion.token) return { ok: false, message: 'Add your integration token first.' };
+  if (!notion.databaseId) return { ok: false, message: 'Choose which database to log to.' };
+
+  try {
+    const response = await fetch(`https://api.notion.com/v1/databases/${notion.databaseId}`, {
+      headers: {
+        Authorization: `Bearer ${notion.token}`,
+        'Notion-Version': NOTION_VERSION,
+      },
+    });
+
+    if (response.status === 401) {
+      return { ok: false, message: "That token wasn't accepted. Check you copied all of it." };
+    }
+    if (response.status === 404) {
+      return {
+        ok: false,
+        message: "Notion can't see that database. In Notion, open it, click the ••• menu, and share it with your integration.",
+      };
+    }
+    if (!response.ok) {
+      return { ok: false, message: `Notion returned an error (${response.status}).` };
+    }
+
+    const data = (await response.json()) as { title?: Array<{ plain_text: string }> };
+    return {
+      ok: true,
+      databaseTitle: data.title?.map((t) => t.plain_text).join('') || 'your database',
+    };
+  } catch {
+    return { ok: false, message: 'Could not reach Notion. Check your internet connection.' };
+  }
+}
+
+export interface ExistingApplication {
+  title: string;
+  appliedDate: string | null;
+  status: string | null;
+  url: string;
+}
+
+function readTitle(page: NotionPage): string {
+  const prop = Object.values(page.properties ?? {}).find((p) => p?.type === 'title');
+  return prop?.title?.map((t) => t.plain_text).join('') || 'Untitled';
+}
+
+interface NotionPage {
+  url: string;
+  properties?: Record<
+    string,
+    {
+      type?: string;
+      title?: Array<{ plain_text: string }>;
+      date?: { start?: string } | null;
+      select?: { name?: string } | null;
+    }
+  >;
+}
+
+/**
+ * Looks for applications already logged to the same company, so the user can
+ * be warned before creating a duplicate row. Returns an empty list rather
+ * than throwing — a warning is a nicety and must never block logging.
+ */
+export async function findExistingApplications(
+  notion: NotionCredentials,
+  company: string
+): Promise<ExistingApplication[]> {
+  if (!notion.token || !notion.databaseId || !company.trim()) return [];
+
+  try {
+    const response = await fetch(
+      `https://api.notion.com/v1/databases/${encodeURIComponent(notion.databaseId)}/query`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${notion.token}`,
+          'Notion-Version': NOTION_VERSION,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          filter: { property: 'Company', rich_text: { contains: company.trim() } },
+          page_size: 5,
+        }),
+      }
+    );
+    if (!response.ok) return [];
+
+    const data = (await response.json()) as { results?: NotionPage[] };
+    return (data.results ?? []).map((page) => ({
+      title: readTitle(page),
+      appliedDate: page.properties?.['Applied Date']?.date?.start ?? null,
+      status: page.properties?.Status?.select?.name ?? null,
+      url: page.url,
+    }));
+  } catch {
+    return [];
+  }
 }

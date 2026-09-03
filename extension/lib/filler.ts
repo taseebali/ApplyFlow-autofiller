@@ -1,27 +1,17 @@
 import { getRadioOptionLabel, normalizeText, type FieldMatch, type RadioGroupMatch } from './field-matcher';
+import { fillCombobox, isCombobox } from './combobox';
+import { inferAnswer } from './inference';
+import { matchesBooleanAnswer } from './option-synonyms';
 import { SCHEMA_FIELDS, type Profile } from './schema';
+import { adaptToField, validateWritten, type ValidationProblem } from './field-validation';
 
 export interface FillResult {
   filledCount: number;
   skippedCount: number;
   /** Labels of fields we recognized but couldn't fill (usually: no data for that field yet). */
   skippedLabels: string[];
-}
-
-const BOOLEAN_ANSWER_WORDS: Record<'true' | 'false', string[]> = {
-  true: ['yes', 'y', 'true'],
-  false: ['no', 'n', 'false'],
-};
-
-/**
- * Real-world options are often full sentences ("Yes, I would be willing to
- * move to Munich.") rather than a bare "Yes"/"No", so match on the leading
- * word instead of requiring the whole normalized text to equal it.
- */
-function matchesBooleanAnswer(normalizedOptionText: string, value: boolean): boolean {
-  const answers = BOOLEAN_ANSWER_WORDS[value ? 'true' : 'false'];
-  const firstWord = normalizedOptionText.split(' ')[0] ?? '';
-  return answers.includes(normalizedOptionText) || answers.includes(firstWord);
+  /** Dropdowns where the model, not deterministic matching, picked the option. */
+  aiChoices: Array<{ label: string; answer: string }>;
 }
 
 function getValueKind(path: string): 'text' | 'boolean' | 'preference' {
@@ -37,6 +27,17 @@ function getRawByPath(profile: Profile, path: string): unknown {
   }, profile);
 }
 
+/**
+ * The qualification a form is asking about is the one in progress, or failing
+ * that the most recently finished one — not whichever happens to be first in
+ * the list.
+ */
+function primaryEducation(profile: Profile) {
+  const inProgress = profile.education.find((e) => e.current);
+  if (inProgress) return inProgress;
+  return [...profile.education].sort((a, b) => (b.endDate || '').localeCompare(a.endDate || ''))[0];
+}
+
 /** Text-valued fields, including ones derived rather than stored directly on Profile. */
 function resolveText(profile: Profile, path: string): string | undefined {
   if (path === 'contact.fullName') {
@@ -45,6 +46,25 @@ function resolveText(profile: Profile, path: string): string | undefined {
   }
   if (path === 'logistics.hearAboutUs') {
     return profile.logistics.hearAboutUsPreferences[0];
+  }
+  if (path === 'languages.list') {
+    return profile.languages.map((l) => l.language).filter(Boolean).join(', ') || undefined;
+  }
+  if (path === 'languages.german') {
+    // Forms ask for one language's level at a time; answer with the level
+    // rather than the language name.
+    const german = profile.languages.find((l) => /german|deutsch/i.test(l.language));
+    return german?.level || undefined;
+  }
+  if (path.startsWith('education.')) {
+    const entry = primaryEducation(profile);
+    if (!entry) return undefined;
+    // "Expected graduation date" is the end date of the course being studied.
+    if (path === 'education.graduationDate') return entry.endDate || undefined;
+    if (path === 'education.school') return entry.school || undefined;
+    if (path === 'education.degree') return entry.degree || undefined;
+    if (path === 'education.fieldOfStudy') return entry.fieldOfStudy || undefined;
+    return undefined;
   }
   const value = getRawByPath(profile, path);
   return typeof value === 'string' && value.length > 0 ? value : undefined;
@@ -73,7 +93,74 @@ function dispatchChange(el: HTMLElement) {
  * bypasses that instance patch, so the framework's change tracker correctly
  * sees a diff once we dispatch the input/change events below.
  */
-function setNativeValue(el: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement, value: string) {
+type Writable = HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
+
+/**
+ * What each field held before this fill touched it.
+ *
+ * One click changes thirty fields at once, on a live application that may
+ * autosave. Without this the only remedy for a wrong value is to find and
+ * retype it by hand. Every write goes through `setNativeValue`, so recording
+ * here catches text fields, native selects, radios, and comboboxes alike.
+ *
+ * Element references cannot be serialised, so the journal lives in the frame
+ * that did the writing and dies with the page — which is correct: once the
+ * page is gone, there is nothing left to undo.
+ */
+let writeJournal: Array<{ element: Writable; previous: string }> = [];
+
+/**
+ * Starts a fill run. The journal deliberately survives it.
+ *
+ * Clearing here meant a second fill recorded the *first* fill's values as
+ * "previous", so undo returned the form to the first fill rather than to how
+ * the user found it. `setNativeValue` already records each field only the
+ * first time it is touched, so keeping the journal across runs is what makes
+ * "previous" mean "before ApplyFlow".
+ *
+ * Validation problems are per-run and do reset.
+ */
+export function beginFillJournal(): void {
+  validationProblems = [];
+}
+
+/**
+ * Forgets what was on the page. Called when the page itself changes — a
+ * navigation or a step change — because those elements are gone and their old
+ * values describe a form that no longer exists.
+ */
+export function resetFillJournal(): void {
+  writeJournal = [];
+}
+
+export function journalSize(): number {
+  return writeJournal.length;
+}
+
+/**
+ * Puts back what was there before, most recent first so a field written twice
+ * ends on its original value. Returns how many fields were restored.
+ */
+export function undoFill(): number {
+  let restored = 0;
+  for (const entry of [...writeJournal].reverse()) {
+    // The field may have been removed by a step change; skip rather than throw.
+    if (!entry.element.isConnected) continue;
+    setNativeValue(entry.element, entry.previous);
+    dispatchChange(entry.element);
+    restored++;
+  }
+  writeJournal = [];
+  return restored;
+}
+
+function setNativeValue(el: Writable, value: string) {
+  // Recorded before the write, and only the first time a field is touched, so
+  // "previous" always means "before ApplyFlow", not "before the last keystroke".
+  if (!writeJournal.some((entry) => entry.element === el)) {
+    writeJournal.push({ element: el, previous: el.value });
+  }
+
   const prototype =
     el instanceof HTMLTextAreaElement
       ? HTMLTextAreaElement.prototype
@@ -84,6 +171,67 @@ function setNativeValue(el: HTMLInputElement | HTMLSelectElement | HTMLTextAreaE
   if (setter) setter.call(el, value);
   else el.value = value;
 }
+
+/** Writes a value into a field the way a real user would, so framework-controlled forms notice. */
+export function setNativeFieldValue(
+  el: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement,
+  value: string
+) {
+  // Reshape the value to what this particular field will accept before
+  // writing: a date input takes only yyyy-mm-dd, some phone fields refuse
+  // spaces. Writing a value the form rejects looked like success until submit.
+  setNativeValue(el, adaptToField(value, el));
+  dispatchChange(el);
+}
+
+/**
+ * Values written into fields that the form itself rejects. Collected during a
+ * fill so "written but invalid" can be reported separately from "filled" —
+ * counting them together overstated how well filling worked, and left the user
+ * to discover the problem at submit time.
+ */
+let validationProblems: ValidationProblem[] = [];
+
+export function takeValidationProblems(): ValidationProblem[] {
+  const problems = validationProblems;
+  validationProblems = [];
+  return problems;
+}
+
+/** Writes a value, then checks the form accepted it. Returns false if not. */
+export function setAndValidate(
+  el: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement,
+  value: string,
+  label: string
+): boolean {
+  setNativeFieldValue(el, value);
+  const problem = validateWritten(el, label);
+  if (problem) {
+    validationProblems.push(problem);
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Why the last dropdown attempt failed. Scripted dropdowns cannot be tested
+ * outside a real browser, so when one fails the panel needs to say where it
+ * got to rather than reporting a bare miss.
+ */
+let lastComboboxReason: string | undefined;
+
+/**
+ * Set for the duration of one fill so the dropdown layer can escalate to the
+ * model without every helper having to thread settings through.
+ */
+let aiOptionFallback: ((question: string, options: string[], value: string) => Promise<number>) | undefined;
+
+/**
+ * The option a model chose during the current field, if any. Collected the
+ * same way `lastComboboxReason` is, so every fill entry point can report it
+ * without threading a return value through each helper.
+ */
+let lastAiChoice: string | undefined;
 
 function setNativeChecked(el: HTMLInputElement, checked: boolean) {
   const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'checked')?.set;
@@ -109,7 +257,19 @@ function setRadioGroupByPredicate(elements: HTMLInputElement[], matches: (option
   return true;
 }
 
-function fillTextField(el: FieldMatch['element'], text: string): boolean {
+async function fillTextField(el: FieldMatch['element'], text: string): Promise<boolean> {
+  // A scripted dropdown looks like a text input but ignores a plain value
+  // assignment, so it has to be opened and chosen from instead.
+  if (isCombobox(el)) {
+    const result = await fillCombobox(el, text, aiOptionFallback);
+    if (!result.ok) lastComboboxReason = result.reason;
+    lastAiChoice = result.chosenByAi;
+    return result.ok;
+  }
+  return fillPlainTextField(el, text);
+}
+
+function fillPlainTextField(el: FieldMatch['element'], text: string): boolean {
   if (el instanceof HTMLSelectElement) {
     const target = normalizeText(text);
     return setSelectByPredicate(el, (t) => t === target || t.includes(target));
@@ -119,9 +279,15 @@ function fillTextField(el: FieldMatch['element'], text: string): boolean {
   return true;
 }
 
-function fillBooleanField(el: FieldMatch['element'], value: boolean): boolean {
+async function fillBooleanField(el: FieldMatch['element'], value: boolean): Promise<boolean> {
   if (el instanceof HTMLSelectElement) {
     return setSelectByPredicate(el, (t) => matchesBooleanAnswer(t, value));
+  }
+  if (isCombobox(el)) {
+    const result = await fillCombobox(el, value ? 'Yes' : 'No', aiOptionFallback);
+    if (!result.ok) lastComboboxReason = result.reason;
+    lastAiChoice = result.chosenByAi;
+    return result.ok;
   }
   if (el instanceof HTMLInputElement && el.type === 'checkbox') {
     setNativeChecked(el, value);
@@ -131,11 +297,24 @@ function fillBooleanField(el: FieldMatch['element'], value: boolean): boolean {
   return false;
 }
 
-function fillPreferenceField(el: FieldMatch['element'], profile: Profile, path: string): boolean {
-  const preferences = resolvePreferenceList(profile, path).map(normalizeText);
+async function fillPreferenceField(
+  el: FieldMatch['element'],
+  profile: Profile,
+  path: string
+): Promise<boolean> {
+  const preferences = resolvePreferenceList(profile, path);
   if (el instanceof HTMLSelectElement) {
-    for (const pref of preferences) {
+    for (const pref of preferences.map(normalizeText)) {
       if (setSelectByPredicate(el, (t) => t === pref || t.includes(pref))) return true;
+    }
+    return false;
+  }
+  if (isCombobox(el)) {
+    // Try each acceptable answer in order; the form may offer only some.
+    for (const pref of preferences) {
+      const result = await fillCombobox(el, pref, aiOptionFallback);
+      if (result.ok) return true;
+      lastComboboxReason = result.reason;
     }
     return false;
   }
@@ -144,29 +323,72 @@ function fillPreferenceField(el: FieldMatch['element'], profile: Profile, path: 
 }
 
 /** Fills text/select/textarea/checkbox fields matched by matchFields. */
-export function fillFields(matches: FieldMatch[], profile: Profile): FillResult {
+export async function fillFields(
+  matches: FieldMatch[],
+  profile: Profile,
+  options: { aiOptionFallback?: typeof aiOptionFallback } = {}
+): Promise<FillResult> {
+  aiOptionFallback = options.aiOptionFallback;
   let filledCount = 0;
   const skippedLabels: string[] = [];
+  const aiChoices: FillResult['aiChoices'] = [];
 
   for (const match of matches) {
     const kind = getValueKind(match.path);
     let didFill = false;
 
+    lastComboboxReason = undefined;
+    lastAiChoice = undefined;
     if (kind === 'boolean') {
       const value = resolveBoolean(profile, match.path);
-      if (value !== null) didFill = fillBooleanField(match.element, value);
+      if (value !== null) didFill = await fillBooleanField(match.element, value);
     } else if (kind === 'preference') {
-      didFill = fillPreferenceField(match.element, profile, match.path);
+      didFill = await fillPreferenceField(match.element, profile, match.path);
     } else {
       const text = resolveText(profile, match.path);
-      if (text) didFill = fillTextField(match.element, text);
+      if (text) didFill = await fillTextField(match.element, text);
     }
 
-    if (didFill) filledCount += 1;
-    else skippedLabels.push(match.label);
+    if (didFill) {
+      filledCount += 1;
+      if (lastAiChoice) aiChoices.push({ label: match.label, answer: lastAiChoice });
+    } else {
+      skippedLabels.push(lastComboboxReason ? `${match.label} — ${lastComboboxReason}` : match.label);
+    }
+    lastComboboxReason = undefined;
+    lastAiChoice = undefined;
   }
 
-  return { filledCount, skippedCount: skippedLabels.length, skippedLabels };
+  return { filledCount, skippedCount: skippedLabels.length, skippedLabels, aiChoices };
+}
+
+/**
+ * Fills fields the schema could not place but whose answer already follows
+ * from the profile — "are you currently enrolled?", "are you based in Berlin?".
+ * Runs after normal matching, so a field with a real profile field behind it
+ * always wins over an inferred answer.
+ */
+export async function fillInferredFields(
+  fields: Array<{ element: FieldMatch['element']; label: string }>,
+  profile: Profile,
+  options: { aiOptionFallback?: typeof aiOptionFallback } = {}
+): Promise<{ filled: Array<{ label: string; answer: string }>; aiChoices: FillResult['aiChoices'] }> {
+  aiOptionFallback = options.aiOptionFallback;
+  const filled: Array<{ label: string; answer: string }> = [];
+  const aiChoices: FillResult['aiChoices'] = [];
+
+  for (const field of fields) {
+    const answer = inferAnswer(field.label, profile);
+    if (!answer) continue;
+    lastAiChoice = undefined;
+    if (await fillTextField(field.element, answer)) {
+      filled.push({ label: field.label, answer });
+      if (lastAiChoice) aiChoices.push({ label: field.label, answer: lastAiChoice });
+    }
+    lastAiChoice = undefined;
+  }
+
+  return { filled, aiChoices };
 }
 
 /** Fills radio-button groups matched by matchRadioGroups. */
@@ -178,6 +400,7 @@ export function fillRadioGroups(groups: RadioGroupMatch[], profile: Profile): Fi
     const kind = getValueKind(group.path);
     let didFill = false;
 
+    lastComboboxReason = undefined;
     if (kind === 'boolean') {
       const value = resolveBoolean(profile, group.path);
       if (value !== null) {
@@ -201,5 +424,7 @@ export function fillRadioGroups(groups: RadioGroupMatch[], profile: Profile): Fi
     else skippedLabels.push(group.label);
   }
 
-  return { filledCount, skippedCount: skippedLabels.length, skippedLabels };
+  // Radio groups are native elements matched deterministically — the model is
+  // never consulted for them.
+  return { filledCount, skippedCount: skippedLabels.length, skippedLabels, aiChoices: [] };
 }

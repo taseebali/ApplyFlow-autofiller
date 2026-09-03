@@ -14,6 +14,12 @@
   --success-text: #346538;
   --warning-bg: #fbf3db;
   --warning-text: #956400;
+  --tint-blue-bg: #e1f3fe;
+  --tint-blue-text: #1f6c9f;
+  --tint-green-bg: #e7f3e5;
+  --tint-green-text: #2f6b34;
+  --tint-amber-bg: #faf0d6;
+  --tint-amber-text: #8a5d10;
 
   color-scheme: light dark;
   font-synthesis: none;
@@ -40,6 +46,12 @@
     --success-text: #8fcf9a;
     --warning-bg: #362e17;
     --warning-text: #e0b856;
+    --tint-blue-bg: #16303f;
+    --tint-blue-text: #86c5ea;
+    --tint-green-bg: #1e2f1f;
+    --tint-green-text: #9bd3a1;
+    --tint-amber-bg: #332a14;
+    --tint-amber-text: #e6c273;
   }
 }
 
@@ -182,4 +194,182 @@ textarea:focus-visible {
 .pill-danger {
   background: var(--danger-bg);
   color: var(--danger-text);
+}
+
+/* A block-level message that carries its own action button, so it cannot live
+   inside ActionCard (whose children render inside a <button>). */
+.notice {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin-bottom: 12px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.notice p {
+  margin: 0;
+}
+
+.notice-danger {
+  background: var(--danger-bg);
+  color: var(--danger-text);
+}
+
+.notice-warning {
+  background: var(--warning-bg);
+  color: var(--warning-text);
+}
+
+.action-card {
+  display: flex;
+  align-items: stretch;
+  width: 100%;
+  text-align: left;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  padding: 14px;
+  transition: border-color 0.15s ease, transform 0.1s ease;
+}
+
+.action-card:hover:not(.action-card-disabled) {
+  border-color: var(--text-muted);
+}
+
+.action-card-disabled {
+  opacity: 0.6;
+}
+
+/* The card carries the frame; the button inside is only the hit area for the
+   primary action, so it resets everything the frame already provides. */
+.action-card-main {
+  display: flex;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+  padding: 14px;
+  background: none;
+  border: none;
+  border-radius: 10px;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+  transition: transform 0.1s;
+}
+
+.action-card-main:active:not(:disabled) {
+  transform: scale(0.995);
+}
+
+.action-card-main:disabled {
+  cursor: default;
+}
+
+.action-card-toggle {
+  flex-shrink: 0;
+  align-self: flex-start;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 46px;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: 0 10px 0 0;
+  color: var(--text-muted);
+}
+
+.action-card-toggle:hover {
+  color: var(--text);
+}
+
+.action-card-toggle svg {
+  transition: transform 0.18s;
+}
+
+.chevron-open {
+  transform: rotate(90deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .action-card-toggle svg {
+    transition: none;
+  }
+}
+
+.action-card-icon {
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+}
+
+.action-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  flex: 1;
+}
+
+.action-card-title {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.action-card-desc {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.45;
+}
+
+.action-card-result {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.tint-blue {
+  background: color-mix(in srgb, var(--tint-blue-bg) 40%, var(--surface));
+  border-color: color-mix(in srgb, var(--tint-blue-text) 25%, var(--border));
+}
+
+.tint-blue .action-card-icon {
+  background: var(--tint-blue-bg);
+  color: var(--tint-blue-text);
+}
+
+.tint-green {
+  background: color-mix(in srgb, var(--tint-green-bg) 40%, var(--surface));
+  border-color: color-mix(in srgb, var(--tint-green-text) 25%, var(--border));
+}
+
+.tint-green .action-card-icon {
+  background: var(--tint-green-bg);
+  color: var(--tint-green-text);
+}
+
+.tint-amber {
+  background: color-mix(in srgb, var(--tint-amber-bg) 40%, var(--surface));
+  border-color: color-mix(in srgb, var(--tint-amber-text) 25%, var(--border));
+}
+
+.tint-amber .action-card-icon {
+  background: var(--tint-amber-bg);
+  color: var(--tint-amber-text);
+}
+
+.tint-neutral .action-card-icon {
+  background: var(--surface-hover);
+  color: var(--text-muted);
 }

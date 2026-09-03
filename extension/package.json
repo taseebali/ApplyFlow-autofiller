@@ -1,20 +1,24 @@
 {
-  "name": "wxt-react-starter",
-  "description": "manifest.json description",
+  "name": "applyflow",
+  "description": "Fill job applications from a profile that stays on your machine.",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
   "type": "module",
   "scripts": {
     "dev": "wxt",
     "dev:firefox": "wxt -b firefox",
-    "build": "wxt build",
+    "build": "wxt build && node scripts/check-no-secrets.mjs",
     "build:firefox": "wxt build -b firefox",
     "zip": "wxt zip",
     "zip:firefox": "wxt zip -b firefox",
     "compile": "tsc --noEmit",
-    "postinstall": "wxt prepare"
+    "postinstall": "wxt prepare",
+    "test": "vitest run",
+    "check:secrets": "node scripts/check-no-secrets.mjs"
   },
   "dependencies": {
+    "mammoth": "^1.12.1",
+    "pdfjs-dist": "^4.10.38",
     "react": "^19.2.4",
     "react-dom": "^19.2.4"
   },
@@ -23,7 +27,9 @@
     "@types/react-dom": "^19.2.3",
     "@types/wicg-file-system-access": "^2023.10.7",
     "@wxt-dev/module-react": "^1.1.5",
+    "jsdom": "^25.0.1",
     "typescript": "^5.9.3",
+    "vitest": "^3.2.7",
     "web-ext": "^10.5.0",
     "wxt": "^0.21.3"
   }

@@ -1,0 +1,133 @@
+import { beforeEach, describe, expect, it } from 'vitest';
+import { detectQuestions } from './question-detector';
+import { EMPTY_PROFILE } from './schema';
+
+function setBody(html: string) {
+  document.body.innerHTML = html;
+}
+
+describe('detectQuestions', () => {
+  beforeEach(() => setBody(''));
+
+  it('finds a textarea with its label as the question', () => {
+    setBody(`
+      <label for="q1">Why do you want to work here?</label>
+      <textarea id="q1"></textarea>
+    `);
+    const found = detectQuestions(document);
+    expect(found).toHaveLength(1);
+    expect(found[0]!.question).toBe('Why do you want to work here?');
+  });
+
+  it('ignores textareas already claimed by profile field matching', () => {
+    setBody(`
+      <label for="addr">Address line 1</label>
+      <textarea id="addr"></textarea>
+    `);
+    expect(detectQuestions(document)).toHaveLength(0);
+  });
+
+  it('ignores short-label text inputs that are not open-ended questions', () => {
+    setBody(`
+      <label for="x">Ref</label>
+      <input id="x" type="text" />
+    `);
+    expect(detectQuestions(document)).toHaveLength(0);
+  });
+});
+
+describe('excluding non-questions', () => {
+  beforeEach(() => setBody(''));
+
+  it('ignores a scripted dropdown even though it is a long-labelled text input', () => {
+    // Greenhouse renders every dropdown this way; without the combobox check
+    // this reaches the model as an essay question.
+    setBody(`
+      <div class="select__container">
+        <label for="wa">What is your work authorisation in Germany?</label>
+        <div class="select__control"><input id="wa" type="text" /></div>
+      </div>
+    `);
+    expect(detectQuestions(document)).toHaveLength(0);
+  });
+
+  it('still finds a genuine free-text question', () => {
+    setBody(`
+      <label for="why">Why Raisin? And why this specific role?</label>
+      <textarea id="why"></textarea>
+    `);
+    expect(detectQuestions(document)).toHaveLength(1);
+  });
+
+  it('skips a question the profile already answers', () => {
+    setBody(`
+      <label for="enr">Are you currently enrolled at a German university/college?</label>
+      <textarea id="enr"></textarea>
+    `);
+    const studying = {
+      ...EMPTY_PROFILE,
+      education: [
+        {
+          id: 'e1',
+          school: 'SRH',
+          degree: 'BSc',
+          fieldOfStudy: '',
+          startDate: '2024',
+          endDate: '2027',
+          current: true,
+        },
+      ],
+    };
+    expect(detectQuestions(document)).toHaveLength(1);
+    expect(detectQuestions(document, studying)).toHaveLength(0);
+  });
+});
+
+describe('fields that are not questions', () => {
+  it('ignores the reCAPTCHA response textarea', () => {
+    document.body.innerHTML = '<form><textarea name="g-recaptcha-response" style="display:none"></textarea></form>';
+    expect(detectQuestions(document)).toEqual([]);
+  });
+
+  it('ignores a hidden honeypot textarea with a plausible label', () => {
+    document.body.innerHTML =
+      '<form><label>Tell us about yourself in detail<textarea name="bio" style="display:none"></textarea></label></form>';
+    expect(detectQuestions(document)).toEqual([]);
+  });
+
+  it('still finds a real question next to them', () => {
+    document.body.innerHTML =
+      '<form><textarea name="g-recaptcha-response" style="display:none"></textarea>' +
+      '<label>Why do you want to work here?<textarea name="why"></textarea></label></form>';
+    expect(detectQuestions(document).map((q) => q.question)).toEqual(['Why do you want to work here?']);
+  });
+});
+
+describe('short factual fields are not essay questions', () => {
+  it('does not draft a long single-word label', () => {
+    // "Gehaltsvorstellung* (erforderlich)" is 31 characters but two words.
+    // Sending it to a model produced an invented salary figure.
+    document.body.innerHTML =
+      '<form><label>Gehaltsvorstellung (erforderlich)<input name="salary"></label></form>';
+    expect(detectQuestions(document)).toEqual([]);
+  });
+
+  it('still drafts a genuine question of the same length', () => {
+    document.body.innerHTML = '<form><label>Why do you want this job?<input name="q"></label></form>';
+    expect(detectQuestions(document)).toHaveLength(1);
+  });
+
+  it('still treats any textarea as open-ended, however it is labelled', () => {
+    document.body.innerHTML = '<form><label>Anschreiben<textarea name="c"></textarea></label></form>';
+    expect(detectQuestions(document)).toHaveLength(1);
+  });
+});
+
+describe('inputs with no type attribute', () => {
+  it('detects a question on an input that omits type, which defaults to text', () => {
+    // `input[type="text"]` matches only a literal attribute, so these were
+    // invisible to drafting entirely.
+    document.body.innerHTML = '<form><label>Tell us why you are a good fit here<input name="q"></label></form>';
+    expect(detectQuestions(document)).toHaveLength(1);
+  });
+});

@@ -2,22 +2,15 @@ body {
   min-width: 0;
 }
 
-.panel .actions-section {
+.panel .daily-actions {
   display: flex;
   flex-direction: column;
   gap: 10px;
 }
 
-.panel .actions-section .btn {
-  width: 100%;
-}
-
-.panel .status-row {
-  margin: -2px 0 0;
-}
-
 .panel .unmatched-labels {
-  margin: 4px 0 0;
+  display: block;
+  width: 100%;
   font-size: 11.5px;
   color: var(--text-muted);
   line-height: 1.5;
@@ -78,19 +71,309 @@ body {
   flex: 1;
 }
 
-.panel .profile-header {
-  margin-top: 24px;
-  padding-top: 20px;
-  border-top: 1px solid var(--border);
+.panel .app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 32px;
+  margin-bottom: 16px;
+}
+
+.panel .wordmark {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.panel .icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: none;
+  color: var(--text-muted);
+}
+
+.panel .icon-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.panel .wizard-progress {
+  display: flex;
+  gap: 5px;
+  margin-bottom: 22px;
+}
+
+.panel .wizard-dot {
+  height: 3px;
+  flex: 1;
+  border-radius: 999px;
+  background: var(--border);
+  transition: background-color 0.25s ease;
+}
+
+.panel .wizard-dot-active {
+  background: var(--accent);
+}
+
+.panel .wizard-step {
+  animation: wizard-in 0.2s ease both;
+}
+
+@keyframes wizard-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .panel .wizard-step {
+    animation: none;
+  }
+}
+
+.panel .wizard-title {
+  font-size: 21px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+  margin-bottom: 6px;
+}
+
+.panel .wizard-blurb {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin: 0 0 18px;
+}
+
+.panel .wizard-nav {
+  display: flex;
+  gap: 8px;
+  margin-top: 20px;
+}
+
+.panel .wizard-nav .btn {
+  flex: 1;
+}
+
+.panel .tab-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 16px;
+}
+
+.panel .tab {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-muted);
+  padding: 4px 11px;
+  font-size: 11.5px;
+  font-weight: 500;
+}
+
+.panel .tab-active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+}
+
+.panel .auto-answered {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+}
+
+.panel .completeness {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.panel .completeness .hint {
+  margin: 0;
+}
+
+.panel .setup-footer {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 16px;
+}
+
+.panel .drafts {
   display: flex;
   flex-direction: column;
   gap: 10px;
 }
 
-.panel .profile-header h2 {
-  font-size: 11px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
+.panel .draft {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 12px;
+}
+
+.panel .drafts-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.panel .drafts-toolbar .hint {
+  margin: 0;
+}
+
+/* The whole header row is the toggle, so it is a button reset back to looking
+   like a heading rather than a control. */
+.panel .draft-question {
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  text-align: left;
+  cursor: pointer;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  font-family: inherit;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.panel .draft-question:hover .draft-question-text {
   color: var(--text-muted);
+}
+
+.panel .draft-question-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.panel .draft-chevron {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  transition: transform 0.15s;
+  display: inline-block;
+}
+
+.panel .draft-chevron-open {
+  transform: rotate(90deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .panel .draft-chevron {
+    transition: none;
+  }
+}
+
+.panel .draft-body {
+  margin-top: 8px;
+}
+
+.panel .draft textarea {
+  width: 100%;
+  min-height: 110px;
+  resize: vertical;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  padding: 8px;
+  font-family: inherit;
+  font-size: 12.5px;
+}
+
+.panel .draft-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.panel .draft-actions .btn {
+  flex: 1;
+}
+
+.panel .duplicate-warning {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  padding: 10px;
+}
+
+.panel .duplicate-row {
+  font-size: 12px;
+  color: var(--text-muted);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.panel .duplicate-row:hover {
+  color: var(--text);
+}
+
+.panel .teach-toggle {
+  align-self: flex-start;
+  font-size: 12px;
+}
+
+.panel .teach-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 12px;
+}
+
+.panel .teach-intro {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.panel .teach-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.panel .teach-label {
+  font-size: 12.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.panel .teach-row select {
+  flex-shrink: 0;
+  max-width: 46%;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  padding: 5px 7px;
+  font-family: inherit;
+  font-size: 12px;
 }

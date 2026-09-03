@@ -1,17 +1,51 @@
-import { fillFields, fillRadioGroups } from '@/lib/filler';
-import { matchFields, matchFileInputs, matchRadioGroups, type FileInputMatch } from '@/lib/field-matcher';
+import {
+  beginFillJournal,
+  fillFields,
+  fillInferredFields,
+  fillRadioGroups,
+  journalSize,
+  resetFillJournal,
+  setNativeFieldValue,
+  takeValidationProblems,
+  undoFill,
+} from '@/lib/filler';
+import {
+  findUnrecognizedElements,
+  findUnrecognizedFields,
+  matchFields,
+  matchFileInputs,
+  matchRadioGroups,
+  type FileInputMatch,
+  type UnrecognizedField,
+} from '@/lib/field-matcher';
+import { getOverridesForHost } from '@/lib/field-overrides';
 import { getProfile } from '@/lib/storage';
 import { scrapeCompanyName } from '@/lib/company-scraper';
 import { scrapeJobDescription, scrapeJobTitle } from '@/lib/jd-scraper';
 import type { DocumentKind } from '@/lib/document-matcher';
+import { detectQuestions } from '@/lib/question-detector';
+import type { ChooseOptionMessage } from '@/entrypoints/background';
+import { frameHasWork, summarizeFrame } from '@/lib/frames';
 
 export interface FillPageMessage {
   type: 'fill-page';
 }
 export interface FillPageResponse {
+  /** Fields whose previous value was recorded, so the panel can offer an undo. */
+  undoable: number;
+  /** Values written that the form itself rejects — they will fail at submit. */
+  invalid: Array<{ label: string; reason: string }>;
   filledCount: number;
   unmatchedCount: number;
   unmatchedLabels: string[];
+  /** Fields we could fill but could not identify — the panel offers to learn these. */
+  unrecognized: UnrecognizedField[];
+  /** Questions answered from the profile rather than a matched field. */
+  /** Questions the profile settled on its own, so the user can check them. */
+  inferred: Array<{ label: string; answer: string }>;
+  /** Dropdowns where a model picked the option rather than exact matching. */
+  aiChoices: Array<{ label: string; answer: string }>;
+  hostname: string;
 }
 
 export interface GetJobInfoMessage {
@@ -36,11 +70,52 @@ export interface AttachDocumentsMessage {
     data: ArrayBuffer;
   }>;
 }
+export interface AttachOutcome {
+  ok: boolean;
+  /** Why an attach failed, in words worth showing the user. */
+  reason?: string;
+}
 export interface AttachDocumentsResponse {
-  attached: Partial<Record<DocumentKind, boolean>>;
+  attached: Partial<Record<DocumentKind, AttachOutcome>>;
 }
 
-type IncomingMessage = FillPageMessage | GetJobInfoMessage | AttachDocumentsMessage;
+export interface GetQuestionsMessage {
+  type: 'get-questions';
+}
+export interface GetQuestionsResponse {
+  /** `maxLength` is the field's own `maxlength`, when the form declares one -
+   * the most reliable signal of how long an answer is expected to be. */
+  questions: Array<{ id: string; question: string; maxLength: number | null }>;
+  jobDescription: string | null;
+}
+
+export interface UndoFillMessage {
+  type: 'undo-fill';
+}
+export interface UndoFillResponse {
+  restored: number;
+}
+
+export interface InsertAnswerMessage {
+  type: 'insert-answer';
+  id: string;
+  text: string;
+}
+export interface InsertAnswerResponse {
+  inserted: boolean;
+}
+
+type IncomingMessage =
+  | FillPageMessage
+  | GetJobInfoMessage
+  | AttachDocumentsMessage
+  | GetQuestionsMessage
+  | UndoFillMessage
+  | InsertAnswerMessage;
+
+// Detected question elements can't cross the message boundary, so they're kept
+// here and referenced by id when the side panel asks to insert an answer.
+const detectedQuestions = new Map<string, HTMLTextAreaElement | HTMLInputElement>();
 
 /**
  * Many ATSs don't have dedicated resume/cover-letter fields at all — just one
@@ -49,7 +124,9 @@ type IncomingMessage = FillPageMessage | GetJobInfoMessage | AttachDocumentsMess
  * cover letter end up sharing the same field, both files need to land in a
  * single DataTransfer — setting `.files` twice would overwrite the first.
  */
-function attachDocuments(entries: Array<{ kind: DocumentKind; file: File }>): Partial<Record<DocumentKind, boolean>> {
+function attachDocuments(
+  entries: Array<{ kind: DocumentKind; file: File }>
+): Partial<Record<DocumentKind, AttachOutcome>> {
   const matches = matchFileInputs(document);
   const dedicated: Record<DocumentKind, FileInputMatch | undefined> = {
     resume: matches.find((m) => m.kind === 'resume'),
@@ -57,19 +134,20 @@ function attachDocuments(entries: Array<{ kind: DocumentKind; file: File }>): Pa
   };
   const fallback = matches.find((m) => m.kind === 'additional');
 
-  const result: Partial<Record<DocumentKind, boolean>> = {};
+  const result: Partial<Record<DocumentKind, AttachOutcome>> = {};
   const filesByElement = new Map<HTMLInputElement, File[]>();
+  const targetByKind = new Map<DocumentKind, HTMLInputElement>();
 
   for (const entry of entries) {
     const target = dedicated[entry.kind] ?? fallback;
     if (!target) {
-      result[entry.kind] = false;
+      result[entry.kind] = { ok: false, reason: 'no upload field for this document on the page' };
       continue;
     }
     const list = filesByElement.get(target.element) ?? [];
     list.push(entry.file);
     filesByElement.set(target.element, list);
-    result[entry.kind] = true;
+    targetByKind.set(entry.kind, target.element);
   }
 
   for (const [element, files] of filesByElement) {
@@ -80,32 +158,170 @@ function attachDocuments(entries: Array<{ kind: DocumentKind; file: File }>): Pa
       Array.from(element.files ?? []).forEach((f) => dataTransfer.items.add(f));
     }
     files.forEach((f) => dataTransfer.items.add(f));
-    element.files = dataTransfer.files;
+    try {
+      element.files = dataTransfer.files;
+    } catch {
+      // Some uploaders make `files` non-writable; that is a real failure and
+      // the verification below reports it rather than assuming success.
+    }
     element.dispatchEvent(new Event('input', { bubbles: true }));
     element.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+
+  // Verify rather than assume. Finding a field is not the same as the file
+  // being accepted, and reporting "attached" for a document the form never
+  // received is worse than reporting nothing at all.
+  for (const entry of entries) {
+    if (result[entry.kind]) continue;
+    const element = targetByKind.get(entry.kind);
+    const landed = Array.from(element?.files ?? []).some((f) => f.name === entry.file.name);
+    result[entry.kind] = landed
+      ? { ok: true }
+      : { ok: false, reason: 'the upload field did not accept the file' };
   }
 
   return result;
 }
 
+/**
+ * Multi-page ATS flows (Workday especially) swap the form without a full
+ * page load, so the panel's "filled" summary silently goes stale and the
+ * next page looks already handled. Tell the panel when that happens.
+ *
+ * Detection only — filling still requires a click. Auto-filling a page the
+ * user has not looked at could put wrong data into a live application.
+ */
+function watchForPageChanges() {
+  /** Which fields are on screen — the thing that actually matters to filling. */
+  const formFingerprint = () =>
+    findUnrecognizedFields(document)
+      .map((f) => f.signature)
+      .concat(matchFields(document).map((m) => m.path))
+      .sort()
+      .join('|');
+
+  let lastUrl = location.href;
+  let lastForm = formFingerprint();
+
+  const announce = () => {
+    const url = location.href;
+    const form = formFingerprint();
+    // Some flows change the URL, others swap the form in place and keep it.
+    // Either way the panel's summary is now about a page that is gone.
+    if (url === lastUrl && form === lastForm) return;
+    lastUrl = url;
+    lastForm = form;
+    if (!form) return; // Nothing fillable here; no point nudging the user.
+    // The panel may not be open; a failed send is expected and harmless.
+    browser.runtime.sendMessage({ type: 'page-changed', url }).catch(() => {});
+    // Those elements are gone, so what they used to hold is not something the
+    // user could still want back.
+    resetFillJournal();
+    // A step change can introduce a form where there was none.
+    void announceFrame();
+  };
+
+  // History API navigations do not fire an event of their own.
+  for (const method of ['pushState', 'replaceState'] as const) {
+    const original = history[method];
+    history[method] = function patched(this: History, ...args: Parameters<History['pushState']>) {
+      const result = original.apply(this, args);
+      announce();
+      return result;
+    };
+  }
+  window.addEventListener('popstate', announce);
+
+  // Debounced, because a single render can produce hundreds of mutations.
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  new MutationObserver(() => {
+    clearTimeout(timer);
+    timer = setTimeout(announce, 500);
+  }).observe(document.body, { childList: true, subtree: true });
+}
+
+/**
+ * Tells the worker this frame holds something fillable. Frames self-report
+ * because a broadcast `tabs.sendMessage` returns only the first reply, which
+ * on a multi-frame page is a race rather than an answer — whereas the worker
+ * sees each sender's `frameId` for free.
+ *
+ * Frames with nothing to fill stay silent, so ad and tracking iframes never
+ * enter the registry and are never messaged again.
+ */
+async function announceFrame(): Promise<void> {
+  const summary = summarizeFrame(document);
+  if (!frameHasWork(summary)) return;
+  await browser.runtime
+    .sendMessage({ type: 'frame-has-form', url: location.href, ...summary })
+    .catch(() => {
+      // The worker may not be listening yet; the page-change watcher re-announces.
+    });
+}
+
 export default defineContentScript({
   matches: ['<all_urls>'],
+  // An application embedded in an iframe — Greenhouse and Lever on a company's
+  // own careers page — was previously invisible: the script ran only in the top
+  // document, found no form, and reported "0 filled".
+  allFrames: true,
+  matchAboutBlank: true,
   main() {
+    watchForPageChanges();
+    void announceFrame();
+
     browser.runtime.onMessage.addListener((message: IncomingMessage, _sender, sendResponse) => {
       if (message?.type === 'fill-page') {
         (async () => {
+          // Anything written from here on can be put back.
+          beginFillJournal();
           const profile = await getProfile();
+          const overrides = await getOverridesForHost(location.hostname);
 
-          const fieldMatches = matchFields(document);
-          const fieldResult = fillFields(fieldMatches, profile);
+          // This script never reads settings at all. Reading them here would
+          // pull the whole stored blob — Notion token and OpenRouter key
+          // included — into a script that runs on every page the user visits,
+          // just to learn one boolean. The worker holds the secrets, decides
+          // whether AI escalation is even configured, and answers with an
+          // option index and nothing else.
+          const aiOptionFallback = async (question: string, options: string[], value: string) => {
+            const response = (await browser.runtime.sendMessage({
+              type: 'choose-option',
+              question,
+              options,
+              value,
+            } satisfies ChooseOptionMessage)) as { index?: number } | undefined;
+            return response?.index ?? -1;
+          };
+
+          const fieldMatches = matchFields(document, overrides);
+          // Only consulted when exact, word-set and synonym matching have all
+          // failed, so an ordinary form makes no model calls at all.
+          const fieldResult = await fillFields(fieldMatches, profile, { aiOptionFallback });
 
           const radioGroupMatches = matchRadioGroups(document);
           const radioResult = fillRadioGroups(radioGroupMatches, profile);
 
+          // Questions the profile already settles — "are you still studying?",
+          // "are you based in Berlin?" — answered without asking the user again.
+          const unrecognized = findUnrecognizedElements(document, overrides);
+          const inferred = await fillInferredFields(unrecognized, profile, { aiOptionFallback });
+          const inferredLabels = new Set(inferred.filled.map((f) => f.label));
+
           const response: FillPageResponse = {
-            filledCount: fieldResult.filledCount + radioResult.filledCount,
+            undoable: journalSize(),
+            invalid: takeValidationProblems(),
+            filledCount: fieldResult.filledCount + radioResult.filledCount + inferred.filled.length,
             unmatchedCount: fieldResult.skippedCount + radioResult.skippedCount,
             unmatchedLabels: [...fieldResult.skippedLabels, ...radioResult.skippedLabels],
+            // Anything just answered by inference is no longer something the
+            // user needs to teach us.
+            unrecognized: unrecognized
+              .filter((f) => !inferredLabels.has(f.label))
+              .map(({ label, signature }) => ({ label, signature })),
+            inferred: inferred.filled,
+            aiChoices: [...fieldResult.aiChoices, ...inferred.aiChoices],
+            hostname: location.hostname,
           };
           sendResponse(response);
         })();
@@ -131,6 +347,43 @@ export default defineContentScript({
           file: new File([f.data], f.name, { type: f.mimeType }),
         }));
         const response: AttachDocumentsResponse = { attached: attachDocuments(entries) };
+        sendResponse(response);
+        return true;
+      }
+
+      if (message?.type === 'undo-fill') {
+        const response: UndoFillResponse = { restored: undoFill() };
+        sendResponse(response);
+        return true;
+      }
+
+      if (message?.type === 'get-questions') {
+        (async () => {
+          detectedQuestions.clear();
+          const profile = await getProfile();
+          const found = detectQuestions(document, profile);
+          const questions = found.map((q, i) => {
+            const id = `q${i}`;
+            detectedQuestions.set(id, q.element);
+            // maxLength is -1 when the attribute is absent.
+            const declared = q.element.maxLength;
+            return { id, question: q.question, maxLength: declared > 0 ? declared : null };
+          });
+          const response: GetQuestionsResponse = {
+            questions,
+            jobDescription: await scrapeJobDescription(),
+          };
+          sendResponse(response);
+        })();
+        return true;
+      }
+
+      if (message?.type === 'insert-answer') {
+        const element = detectedQuestions.get(message.id);
+        if (element) {
+          setNativeFieldValue(element, message.text);
+        }
+        const response: InsertAnswerResponse = { inserted: Boolean(element) };
         sendResponse(response);
         return true;
       }
